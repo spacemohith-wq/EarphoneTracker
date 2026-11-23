@@ -1,111 +1,619 @@
-package com.wirepulse.audiocompanion
-
-import android.Manifest
-import android.app.Activity
-import android.content.Context
-import android.content.pm.PackageManager
-import android.media.AudioDeviceCallback
-import android.media.AudioDeviceInfo
-import android.media.AudioManager
-import android.os.Build
-import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.webkit.PermissionRequest
-import android.webkit.WebChromeClient
-import android.webkit.WebView
-import android.webkit.WebViewClient
-
-class MainActivity : Activity() {
-    private lateinit var webView: WebView
-    private lateinit var audioManager: AudioManager
-    private var lastConnectedState: Boolean? = null
-
-    private val audioCallback = object : AudioDeviceCallback() {
-        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
-            syncEarphoneState()
-        }
-        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
-            syncEarphoneState()
-        }
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>WirePulse AMG — Earphone Telemetry & Tracker</title>
+  <style>
+    :root {
+      --bg-dark: #090b0d;
+      --bg-panel: #111519;
+      --bg-card: #161b20;
+      --amg-teal: #00d2be;
+      --amg-teal-dim: rgba(0, 210, 190, 0.14);
+      --amg-silver: #c8d0d8;
+      --text-main: #f0f4f8;
+      --text-muted: #7d8a97;
+      --danger: #ff3b5c;
+      --warning: #ffb800;
+      --border: #222a32;
     }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 101)
-        }
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      background-image: radial-gradient(circle at 50% 0%, rgba(0, 210, 190, 0.08) 0%, transparent 60%);
+    }
 
-        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    /* Header */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 18px;
+    }
 
-        webView = WebView(this).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.databaseEnabled = true
-            settings.mediaPlaybackRequiresUserGesture = false
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
 
-            webChromeClient = object : WebChromeClient() {
-                override fun onPermissionRequest(request: PermissionRequest?) {
-                    request?.grant(request.resources)
-                }
+    .brand-bar {
+      width: 4px;
+      height: 26px;
+      background: linear-gradient(180deg, var(--amg-teal), #007a70);
+      border-radius: 2px;
+      box-shadow: 0 0 10px var(--amg-teal);
+    }
+
+    .brand h1 {
+      font-size: 1.25rem;
+      font-weight: 800;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+    }
+
+    .brand span {
+      color: var(--amg-teal);
+    }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--text-muted);
+      transition: all 0.3s ease;
+    }
+
+    .status-pill.connected {
+      border-color: var(--amg-teal);
+      color: var(--amg-teal);
+      background: var(--amg-teal-dim);
+    }
+
+    .status-pill.connected .status-dot {
+      background-color: var(--amg-teal);
+      box-shadow: 0 0 8px var(--amg-teal);
+    }
+
+    .status-pill.disconnected {
+      border-color: var(--danger);
+      color: var(--danger);
+      background: rgba(255, 59, 92, 0.12);
+    }
+
+    .status-pill.disconnected .status-dot {
+      background-color: var(--danger);
+      box-shadow: 0 0 8px var(--danger);
+    }
+
+    /* Radar / Telemetry Core */
+    .radar-card {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-bottom: 16px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .radar-ring {
+      width: 140px;
+      height: 140px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      margin-bottom: 16px;
+      transition: border-color 0.3s ease;
+    }
+
+    .radar-ring.active {
+      border-color: var(--amg-teal);
+      box-shadow: 0 0 25px rgba(0, 210, 190, 0.15), inset 0 0 20px rgba(0, 210, 190, 0.1);
+    }
+
+    .radar-ring.alert {
+      border-color: var(--danger);
+      animation: pulseAlert 1s infinite;
+    }
+
+    @keyframes pulseAlert {
+      0% { box-shadow: 0 0 0 0 rgba(255, 59, 92, 0.5); }
+      70% { box-shadow: 0 0 0 18px rgba(255, 59, 92, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(255, 59, 92, 0); }
+    }
+
+    .jack-icon {
+      width: 48px;
+      height: 48px;
+      fill: var(--text-muted);
+      transition: fill 0.3s ease;
+    }
+
+    .radar-ring.active .jack-icon {
+      fill: var(--amg-teal);
+    }
+
+    .radar-ring.alert .jack-icon {
+      fill: var(--danger);
+    }
+
+    .device-name {
+      font-size: 1.05rem;
+      font-weight: 700;
+      margin-bottom: 4px;
+      text-align: center;
+    }
+
+    .device-sub {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      text-align: center;
+    }
+
+    /* Telemetry Grid */
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .metric-box {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+    }
+
+    .metric-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .metric-val {
+      font-size: 1.15rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--amg-silver);
+    }
+
+    .metric-val.highlight {
+      color: var(--amg-teal);
+    }
+
+    /* Controls */
+    .controls {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+
+    button {
+      width: 100%;
+      padding: 14px 16px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      color: var(--text-main);
+      font-size: 0.9rem;
+      font-weight: 700;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: transform 0.1s ease, background 0.2s ease, border-color 0.2s ease;
+    }
+
+    button:active {
+      transform: scale(0.98);
+    }
+
+    button.primary {
+      background: var(--amg-teal);
+      color: #050708;
+      border-color: var(--amg-teal);
+      box-shadow: 0 4px 15px rgba(0, 210, 190, 0.25);
+    }
+
+    button.toggle-on {
+      border-color: var(--amg-teal);
+      background: var(--amg-teal-dim);
+      color: var(--amg-teal);
+    }
+
+    button.danger {
+      border-color: var(--danger);
+      background: rgba(255, 59, 92, 0.15);
+      color: var(--danger);
+    }
+
+    /* Event Log */
+    .log-panel {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .log-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+    }
+
+    .clear-btn {
+      width: auto;
+      padding: 4px 8px;
+      font-size: 0.65rem;
+      border-radius: 6px;
+    }
+
+    .log-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+
+    .log-item {
+      font-size: 0.78rem;
+      padding: 8px 10px;
+      background: var(--bg-card);
+      border-left: 3px solid var(--amg-teal);
+      border-radius: 6px;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .log-item.warn {
+      border-left-color: var(--danger);
+    }
+
+    .log-time {
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <div class="brand-bar"></div>
+      <h1>WirePulse <span>AMG</span></h1>
+    </div>
+    <div id="statusPill" class="status-pill">
+      <div class="status-dot"></div>
+      <span id="statusText">Standby</span>
+    </div>
+  </header>
+
+  <section class="radar-card">
+    <div id="radarRing" class="radar-ring">
+      <!-- 3.5mm Audio Jack / Earphone SVG -->
+      <svg class="jack-icon" viewBox="0 0 24 24">
+        <path d="M12 2C10.9 2 10 2.9 10 4V7H8V13C8 14.86 9.28 16.41 11 16.86V22H13V16.86C14.72 16.41 16 14.86 16 13V7H14V4C14 2.9 13.1 2 12 2M10 9H14V13C14 14.1 13.1 15 12 15C10.9 15 10 14.1 10 13V9Z"/>
+      </svg>
+    </div>
+    <div id="deviceName" class="device-name">No Wired Audio Detected</div>
+    <div id="deviceSub" class="device-sub">Connect 3.5mm / USB-C DAC earphones to begin telemetry</div>
+  </section>
+
+  <section class="grid">
+    <div class="metric-box">
+      <div class="metric-label">Session Uptime</div>
+      <div id="uptimeVal" class="metric-val highlight">00:00:00</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-label">Last Disconnect</div>
+      <div id="lastDropVal" class="metric-val">--:--:--</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-label">Output Channels</div>
+      <div id="channelVal" class="metric-val">0 Detected</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-label">Anti-Theft Guard</div>
+      <div id="guardStatusVal" class="metric-val">ARMED</div>
+    </div>
+  </section>
+
+  <section class="controls">
+    <button id="scanBtn" class="primary" onclick="scanAudioHardware()">
+      Initialize / Scan Audio Port
+    </button>
+    <button id="guardBtn" class="toggle-on" onclick="toggleAntiTheft()">
+      Anti-Theft Unplug Alarm: ON
+    </button>
+    <button id="pingBtn" onclick="triggerPulsePing()">
+      Acoustic Pulse Finder (Ping)
+    </button>
+  </section>
+
+  <section class="log-panel">
+    <div class="log-header">
+      <span>Telemetry Event Log</span>
+      <button class="clear-btn" onclick="clearLogs()">Clear</button>
+    </div>
+    <ul id="logList" class="log-list"></ul>
+  </section>
+
+  <script>
+    let isConnected = false;
+    let guardEnabled = true;
+    let sessionSeconds = 0;
+    let timerInterval = null;
+    let alarmInterval = null;
+    let audioCtx = null;
+
+    const statusPill = document.getElementById('statusPill');
+    const statusText = document.getElementById('statusText');
+    const radarRing = document.getElementById('radarRing');
+    const deviceNameEl = document.getElementById('deviceName');
+    const deviceSubEl = document.getElementById('deviceSub');
+    const uptimeVal = document.getElementById('uptimeVal');
+    const lastDropVal = document.getElementById('lastDropVal');
+    const channelVal = document.getElementById('channelVal');
+    const guardStatusVal = document.getElementById('guardStatusVal');
+    const guardBtn = document.getElementById('guardBtn');
+    const logList = document.getElementById('logList');
+
+    function getTimeString() {
+      return new Date().toLocaleTimeString([], { hour12: false });
+    }
+
+    function addLog(message, isWarning = false) {
+      const li = document.createElement('li');
+      li.className = 'log-item' + (isWarning ? ' warn' : '');
+      li.innerHTML = `<span>${message}</span><span class="log-time">${getTimeString()}</span>`;
+      logList.prepend(li);
+      if (logList.children.length > 25) {
+        logList.removeChild(logList.lastChild);
+      }
+    }
+
+    function clearLogs() {
+      logList.innerHTML = '';
+      addLog('Telemetry log cleared');
+    }
+
+    function formatDuration(sec) {
+      const h = String(Math.floor(sec / 3600)).padStart(2, '0');
+      const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
+      const s = String(sec % 60).padStart(2, '0');
+      return `${h}:${m}:${s}`;
+    }
+
+    function startTimer() {
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        sessionSeconds++;
+        uptimeVal.textContent = formatDuration(sessionSeconds);
+      }, 1000);
+    }
+
+    function stopTimer() {
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = null;
+    }
+
+    function initAudioContext() {
+      if (!audioCtx) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContext();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+    }
+
+    function playTone(freq, duration, type = 'sine') {
+      try {
+        initAudioContext();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+      } catch (e) {
+        console.warn('Audio playback blocked until user interaction:', e);
+      }
+    }
+
+    function triggerPulsePing() {
+      initAudioContext();
+      addLog('Acoustic pulse sent to audio output');
+      playTone(880, 0.18, 'triangle');
+      setTimeout(() => playTone(1320, 0.25, 'triangle'), 200);
+      if (navigator.vibrate) navigator.vibrate([80, 60, 80]);
+    }
+
+    function startUnplugAlarm() {
+      if (alarmInterval) return;
+      radarRing.classList.add('alert');
+      if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 300]);
+      playTone(960, 0.25, 'sawtooth');
+      alarmInterval = setInterval(() => {
+        playTone(960, 0.25, 'sawtooth');
+        if (navigator.vibrate) navigator.vibrate([250, 150]);
+      }, 600);
+    }
+
+    function stopUnplugAlarm() {
+      if (alarmInterval) {
+        clearInterval(alarmInterval);
+        alarmInterval = null;
+      }
+      radarRing.classList.remove('alert');
+    }
+
+    function toggleAntiTheft() {
+      guardEnabled = !guardEnabled;
+      if (guardEnabled) {
+        guardBtn.className = 'toggle-on';
+        guardBtn.textContent = 'Anti-Theft Unplug Alarm: ON';
+        guardStatusVal.textContent = 'ARMED';
+        guardStatusVal.style.color = 'var(--amg-teal)';
+        addLog('Anti-theft unplug guard armed');
+      } else {
+        guardBtn.className = '';
+        guardBtn.textContent = 'Anti-Theft Unplug Alarm: OFF';
+        guardStatusVal.textContent = 'DISARMED';
+        guardStatusVal.style.color = 'var(--text-muted)';
+        stopUnplugAlarm();
+        addLog('Anti-theft unplug guard disarmed');
+      }
+    }
+
+    async function scanAudioHardware() {
+      initAudioContext();
+      stopUnplugAlarm();
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        addLog('MediaDevices API not supported in this WebView', true);
+        return;
+      }
+
+      try {
+        // Request minimal audio permission if labels are hidden
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioOutputs = devices.filter(d => d.kind === 'audiooutput');
+        const audioInputs = devices.filter(d => d.kind === 'audioinput');
+        const allAudio = [...audioOutputs, ...audioInputs];
+
+        channelVal.textContent = `${audioOutputs.length} Output(s)`;
+
+        // Detect wired headset / USB DAC / external headphones
+        const wiredDevice = allAudio.find(d => {
+          const label = (d.label || '').toLowerCase();
+          return (
+            label.includes('headset') ||
+            label.includes('headphone') ||
+            label.includes('wired') ||
+            label.includes('usb') ||
+            label.includes('dac') ||
+            label.includes('earphone')
+          );
+        });
+
+        // Fallback: On mobile browsers, connecting a 3.5mm jack often adds an extra audiooutput beyond 'default'
+        const hasExternalRoute = Boolean(wiredDevice) || audioOutputs.length > 1;
+
+        if (hasExternalRoute) {
+          const detectedLabel = (wiredDevice && wiredDevice.label) ? wiredDevice.label : 'Wired 3.5mm / USB Audio Output';
+          if (!isConnected) {
+            isConnected = true;
+            sessionSeconds = 0;
+            startTimer();
+            addLog(`Connected: ${detectedLabel}`);
+          }
+          statusPill.className = 'status-pill connected';
+          statusText.textContent = 'Locked';
+          radarRing.className = 'radar-ring active';
+          deviceNameEl.textContent = detectedLabel;
+          deviceSubEl.textContent = 'Signal integrity optimal • Monitoring active';
+        } else {
+          if (isConnected) {
+            // Sudden disconnect detected
+            isConnected = false;
+            stopTimer();
+            const now = getTimeString();
+            lastDropVal.textContent = now;
+            localStorage.setItem('wirepulse_last_drop', now);
+            addLog('ALERT: Wired earphones disconnected!', true);
+            if (guardEnabled) {
+              startUnplugAlarm();
             }
-
-            webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView?, url: String?) {
-                    super.onPageFinished(view, url)
-                    lastConnectedState = null
-                    syncEarphoneState()
-                }
-            }
+          }
+          statusPill.className = 'status-pill disconnected';
+          statusText.textContent = 'Unplugged';
+          radarRing.className = 'radar-ring';
+          deviceNameEl.textContent = 'No Wired Audio Detected';
+          deviceSubEl.textContent = 'Plug in earphones to lock telemetry';
         }
-
-        setContentView(webView)
-        webView.loadUrl("file:///android_asset/index.html")
-        audioManager.registerAudioDeviceCallback(audioCallback, Handler(Looper.getMainLooper()))
+      } catch (err) {
+        addLog('Hardware scan error: ' + err.message, true);
+      }
     }
 
-    private fun syncEarphoneState() {
-        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-        var connected = false
-        var isUsb = false
-        var label = "Wired Headset"
-
-        for (d in devices) {
-            when (d.type) {
-                AudioDeviceInfo.TYPE_WIRED_HEADSET,
-                AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> {
-                    connected = true
-                    isUsb = false
-                    label = d.productName?.toString()?.takeIf { it.isNotBlank() } ?: "3.5mm Wired IEM"
-                    break
-                }
-                AudioDeviceInfo.TYPE_USB_HEADSET,
-                AudioDeviceInfo.TYPE_USB_DEVICE -> {
-                    connected = true
-                    isUsb = true
-                    label = d.productName?.toString()?.takeIf { it.isNotBlank() } ?: "USB-C DAC / IEM"
-                    break
-                }
-            }
-        }
-
-        if (lastConnectedState == connected) return
-        lastConnectedState = connected
-
-        val safeLabel = label.replace("'", "")
-        webView.post {
-            webView.evaluateJavascript(
-                "if(window.onNativeAndroidEarphoneState){window.onNativeAndroidEarphoneState($connected, '$safeLabel', $isUsb);}",
-                null
-            )
-        }
+    // Listen for live hardware plug/unplug events
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener('devicechange', () => {
+        addLog('Hardware bus state changed...');
+        scanAudioHardware();
+      });
     }
 
-    override fun onDestroy() {
-        audioManager.unregisterAudioDeviceCallback(audioCallback)
-        super.onDestroy()
-    }
-}
-          
+    // Restore last disconnect timestamp on boot
+    window.addEventListener('DOMContentLoaded', () => {
+      const savedDrop = localStorage.getItem('wirepulse_last_drop');
+      if (savedDrop) {
+        lastDropVal.textContent = savedDrop;
+      }
+      addLog('WirePulse AMG telemetry core initialized');
+      scanAudioHardware();
+    });
+  </script>
+</body>
+</html>
