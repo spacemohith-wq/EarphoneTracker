@@ -1,4 +1,4 @@
-name: Build WirePulse APK
+name: Earphone tracker APK
 on:
 push:
 branches: [ main ]
@@ -24,5 +24,5 @@ chmod +x gradlew
 - name: Upload APK
 uses: actions/upload-artifact@v4
 with:
-name: WirePulse-AMG-App
+name: Earphone tracker App
 path: app/build/outputs/apk/debug/app-debug.apk
